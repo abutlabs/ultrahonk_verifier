@@ -12,14 +12,18 @@
 #                                                     ROM-LogUp relation (bb v6.0.0) has live rows
 # The recursion and ROM programs are barretenberg's own (acir_tests/internal_test_programs and
 # noir/bb_proof_verification), taken from an aztec-packages checkout. Every proof except the
-# invalid ones is checked with `bb verify`.
+# invalid ones is checked with `bb verify`. Stock bb refuses to write a proof that fails its own
+# check, so the invalid-inner proofs are made with BB_UNCHECKED, the same release built without
+# that check (scripts/build_bb_unchecked.sh); stock bb then confirms it rejects them.
 #
-#   BB=bb-6.0.0 NARGO=nargo-1.0.0-rc.3 AZTEC_PACKAGES=../aztec-packages scripts/generate_test_fixtures.sh
+#   BB=bb-6.0.0 BB_UNCHECKED=bb-unchecked/bin/bb NARGO=nargo-1.0.0-rc.3 \
+#     AZTEC_PACKAGES=../aztec-packages scripts/generate_test_fixtures.sh
 
 set -euo pipefail
 
 NARGO=${NARGO:-nargo}
 BB=${BB:-bb}
+BB_UNCHECKED=${BB_UNCHECKED:?set BB_UNCHECKED to a bb built by scripts/build_bb_unchecked.sh}
 AZTEC_PACKAGES=$(realpath "${AZTEC_PACKAGES:?set AZTEC_PACKAGES to an aztec-packages checkout}")
 BBDIR=$AZTEC_PACKAGES/barretenberg
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -108,7 +112,7 @@ for f in zk plain; do fixture recursive_valid "$DATA/recursive/valid/$f" $f; don
 echo "== verify_honk_proof, inner KZG commitment negated"
 program recursive_invalid "$BBDIR/acir_tests/internal_test_programs/verify_honk_proof/src/main.nr" "$WORK/invalid.toml" "$DEP"
 for f in zk plain; do
-  fixture recursive_invalid "$DATA/recursive/invalid_inner/$f" $f no-verify
+  BB=$BB_UNCHECKED fixture recursive_invalid "$DATA/recursive/invalid_inner/$f" $f no-verify
   if "$BB" verify -t "$([ $f = zk ] && echo evm || echo evm-no-zk)" -p "$DATA/recursive/invalid_inner/$f/proof" \
        -i "$DATA/recursive/invalid_inner/$f/pubs" -k "$DATA/recursive/invalid_inner/$f/vk" > /dev/null 2>&1; then
     echo "  bb verify accepted the invalid-inner $f proof" >&2; exit 1
