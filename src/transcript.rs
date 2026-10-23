@@ -211,14 +211,15 @@ impl CommonTranscriptData for Transcript {
 #[derive(Debug)]
 pub(crate) struct RelationParametersChallenges {
     pub(crate) eta: Fr,
+    pub(crate) rom_logup_gamma: Fr,
     pub(crate) beta: Fr,
     pub(crate) gamma: Fr,
 }
 
 impl RelationParametersChallenges {
     // Constructor
-    pub(crate) fn new(eta: Fr, beta: Fr, gamma: Fr) -> Self {
-        RelationParametersChallenges { eta, beta, gamma }
+    pub(crate) fn new(eta: Fr, rom_logup_gamma: Fr, beta: Fr, gamma: Fr) -> Self {
+        RelationParametersChallenges { eta, rom_logup_gamma, beta, gamma }
     }
 
     // Compute the public input delta
@@ -305,19 +306,14 @@ pub(crate) fn generate_transcript<H: CurveHooks>(
     }
 }
 
-/// Utility for splitting a given challenge into two "halves": one containing its
-/// 127 lower significance bits and one containing its higher significance bits.
-/// The two "halves" are interpreted and returned as `Fr`.
-fn split_challenge(challenge: Fr) -> (Fr, Fr) {
-    let limbs = challenge.into_bigint().0;
-    // compose lower 127 bits as an `Fr`
-    let lower = Fr::from((limbs[0] as u128) | ((limbs[1] as u128 & ((1u128 << 63) - 1)) << 64));
-    // compose upper 127 bits as an `Fr`
-    let upper = Fr::from(
-        ((limbs[1] as u128) >> 63) | ((limbs[2] as u128) << 1) | ((limbs[3] as u128) << 65),
-    );
-
-    (lower, upper)
+/// Since bb v6.0.0 a challenge is a whole Keccak output reduced mod r (no longer split into
+/// two 127-bit halves); a second challenge from the same round is the hash of the first.
+fn rehash(challenge: Fr) -> Fr {
+    let hash: EVMWord = Keccak256::new()
+        .chain_update(challenge.into_be_bytes32())
+        .finalize()
+        .into();
+    Fr::from_be_bytes_mod_order(&hash)
 }
 
 // Generate the relation parameters challenges: eta, beta, gamma
@@ -327,7 +323,7 @@ fn generate_relation_parameters_challenges<H: CurveHooks>(
     vk_hash: &EVMWord,
 ) -> (RelationParametersChallenges, Fr) {
     // Round 0
-    let [eta, previous_challenge] =
+    let [eta, rom_logup_gamma, previous_challenge] =
         generate_eta_challenge::<H>(parsed_proof, public_inputs, vk_hash);
 
     // Round 1
@@ -335,7 +331,7 @@ fn generate_relation_parameters_challenges<H: CurveHooks>(
         generate_beta_and_gamma_challenges(previous_challenge, parsed_proof);
 
     (
-        RelationParametersChallenges::new(eta, beta, gamma),
+        RelationParametersChallenges::new(eta, rom_logup_gamma, beta, gamma),
         next_previous_challenge,
     )
 }
@@ -345,7 +341,7 @@ fn generate_eta_challenge<H: CurveHooks>(
     parsed_proof: &ParsedProof<H>,
     public_inputs: &Pubs,
     vk_hash: &EVMWord,
-) -> [Fr; 2] {
+) -> [Fr; 3] {
     let mut round0 = Keccak256::new().chain_update(vk_hash);
 
     for word in public_inputs
@@ -374,12 +370,12 @@ fn generate_eta_challenge<H: CurveHooks>(
         .finalize()
         .into();
 
-    let previous_challenge = Fr::from_be_bytes_mod_order(&hash);
+    // eta's powers are computed where they are used (since bb v5.0.0); bb v6.0.0 adds the
+    // ROM-LogUp offset, drawn as the hash of eta, and the transcript continues from it
+    let eta = Fr::from_be_bytes_mod_order(&hash);
+    let rom_logup_gamma = rehash(eta);
 
-    // Since bb v5.0.0 only eta is drawn; its powers are computed where they are used.
-    let (eta, _) = split_challenge(previous_challenge);
-
-    [eta, previous_challenge]
+    [eta, rom_logup_gamma, rom_logup_gamma]
 }
 
 // Generate beta and gamma challenges
@@ -398,10 +394,10 @@ fn generate_beta_and_gamma_challenges<H: CurveHooks>(
         .finalize()
         .into();
 
-    let next_previous_challenge = Fr::from_be_bytes_mod_order(&round1);
-    let (beta, gamma) = split_challenge(next_previous_challenge);
+    let beta = Fr::from_be_bytes_mod_order(&round1);
+    let gamma = rehash(beta);
 
-    [beta, gamma, next_previous_challenge]
+    [beta, gamma, gamma]
 }
 
 // Alpha challenges non-linearize the gate contributions
@@ -422,7 +418,7 @@ fn generate_alpha_challenges<H: CurveHooks>(
         .into();
 
     let next_previous_challenge = Fr::from_be_bytes_mod_order(&alpha0);
-    let (alpha, _) = split_challenge(next_previous_challenge);
+    let alpha = next_previous_challenge;
 
     // Compute powers of alpha for batching subrelations
     let mut acc = alpha;
@@ -446,7 +442,7 @@ fn generate_gate_challenges(
         .into();
     let next_previous_challenge = Fr::from_be_bytes_mod_order(&hash);
 
-    (gate_challenges[0], _) = split_challenge(next_previous_challenge);
+    gate_challenges[0] = next_previous_challenge;
 
     for i in 1..log_n as usize {
         gate_challenges[i] = gate_challenges[i - 1].square();
@@ -469,7 +465,7 @@ fn generate_libra_challenge<H: CurveHooks>(
         .into();
 
     let next_previous_challenge = Fr::from_be_bytes_mod_order(&hash);
-    let (libra_challenge, _) = split_challenge(next_previous_challenge);
+    let libra_challenge = next_previous_challenge;
 
     (libra_challenge, next_previous_challenge)
 }
@@ -497,7 +493,7 @@ fn generate_sumcheck_challenges<H: CurveHooks>(
         let hash: EVMWord = hasher.finalize().into();
         previous_challenge = Fr::from_be_bytes_mod_order(&hash);
 
-        (sumcheck_challenges[i], _) = split_challenge(previous_challenge);
+        sumcheck_challenges[i] = previous_challenge;
     }
     let next_previous_challenge = previous_challenge;
 
@@ -530,7 +526,7 @@ fn generate_rho_challenge<H: CurveHooks>(
 
     let hash: EVMWord = hasher.finalize().into();
     let next_previous_challenge = Fr::from_be_bytes_mod_order(&hash);
-    let (rho, _) = split_challenge(next_previous_challenge);
+    let rho = next_previous_challenge;
 
     (rho, next_previous_challenge)
 }
@@ -554,7 +550,7 @@ fn generate_gemini_r_challenge<H: CurveHooks>(
 
     let next_previous_challenge = Fr::from_be_bytes_mod_order(&hash);
 
-    let (gemini_r, _) = split_challenge(next_previous_challenge);
+    let gemini_r = next_previous_challenge;
 
     (gemini_r, next_previous_challenge)
 }
@@ -583,7 +579,7 @@ fn generate_shplonk_nu_challenge<H: CurveHooks>(
     let hash: EVMWord = hasher.finalize().into();
 
     let next_previous_challenge = Fr::from_be_bytes_mod_order(&hash);
-    let (shplonk_nu, _) = split_challenge(next_previous_challenge);
+    let shplonk_nu = next_previous_challenge;
 
     (shplonk_nu, next_previous_challenge)
 }
@@ -601,7 +597,7 @@ fn generate_shplonk_z_challenge<H: CurveHooks>(
         .into();
 
     let next_previous_challenge = Fr::from_be_bytes_mod_order(&hash);
-    let (shplonk_z, _) = split_challenge(next_previous_challenge);
+    let shplonk_z = next_previous_challenge;
 
     (shplonk_z, next_previous_challenge)
 }
@@ -613,7 +609,7 @@ mod should {
     #[test]
     fn compute_public_input_delta_without_overflow_for_any_offset() {
         let challenges =
-            RelationParametersChallenges::new(Fr::from(3u64), Fr::from(5u64), Fr::from(7u64));
+            RelationParametersChallenges::new(Fr::from(3u64), Fr::from(11u64), Fr::from(5u64), Fr::from(7u64));
         let public_inputs = [[0u8; 32]; 1];
         let pairing_point_object = [[0u8; 32]; PAIRING_POINTS_SIZE];
 

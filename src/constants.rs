@@ -18,7 +18,7 @@ use ark_bn254::Fr;
 use ark_ff::MontFp;
 
 pub const CONST_PROOF_SIZE_LOG_N: usize = 25;
-pub const NUMBER_OF_SUBRELATIONS: usize = 29;
+pub const NUMBER_OF_SUBRELATIONS: usize = 31; // bb v6.0.0: + ROM-LogUp's two
 pub const BATCHED_RELATION_PARTIAL_LENGTH: usize = 8; // for Plain case (i.e., non-ZK)
 pub const ZK_BATCHED_RELATION_PARTIAL_LENGTH: usize = 9; // for ZK case
 pub const NUMBER_OF_ENTITIES: usize = 41;

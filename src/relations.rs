@@ -119,6 +119,12 @@ pub(crate) fn accumulate_relation_evaluations(
         &mut evaluations,
         pow_partial_eval,
     );
+    accumulate_rom_logup_relation(
+        purported_evaluations,
+        rp_challenges,
+        &mut evaluations,
+        pow_partial_eval,
+    );
     accumulate_nnf_relation(purported_evaluations, &mut evaluations, pow_partial_eval);
     accumulate_poseidon_external_relation(
         purported_evaluations,
@@ -553,6 +559,35 @@ fn accumulate_memory_relation(
     evals[14] = memory_identity;
 }
 
+/// ROM-LogUp (bb v6.0.0), single-value ROM tables. On its rows (w1, w2, w3, w4) = (index,
+/// value, multiplicity, inverse) and q_c is the array id. q_logup_table = q_r * (1 - q_l) marks
+/// a table entry (w3 = its read count), q_logup_read = q_4 * (1 - q_l) a read (w3 = 0); the
+/// (1 - q_l) factor tells them from ROM consistency and RAM timestamp rows. The fingerprint's
+/// denominator is rom_logup_gamma + index + eta * value + eta^2 * array id.
+fn accumulate_rom_logup_relation(
+    p: &[Fr; NUMBER_OF_ENTITIES],
+    rp: &RelationParametersChallenges,
+    evals: &mut [Fr; NUMBER_OF_SUBRELATIONS],
+    domain_sep: Fr,
+) {
+    let eta_two = rp.eta.square();
+    let q_logup_table = wire(p, Wire::Q_R) * (Fr::ONE - wire(p, Wire::Q_L));
+    let q_logup_read = wire(p, Wire::Q_4) * (Fr::ONE - wire(p, Wire::Q_L));
+    let denom = rp.rom_logup_gamma
+        + wire(p, Wire::W_L)
+        + wire(p, Wire::W_R) * rp.eta
+        + wire(p, Wire::Q_C) * eta_two;
+
+    // each row's inverse is correct: linearly independent, so scaled by the domain separator
+    evals[20] = (q_logup_table + q_logup_read)
+        * (wire(p, Wire::W_4) * denom - Fr::ONE)
+        * (wire(p, Wire::Q_MEMORY) * domain_sep);
+    // the LogUp sum: linearly dependent (summed over the trace), so not scaled
+    evals[21] = (q_logup_read - q_logup_table * wire(p, Wire::W_O))
+        * wire(p, Wire::W_4)
+        * wire(p, Wire::Q_MEMORY);
+}
+
 fn accumulate_nnf_relation(
     p: &[Fr; NUMBER_OF_ENTITIES],
     evals: &mut [Fr; NUMBER_OF_SUBRELATIONS],
@@ -626,7 +661,7 @@ fn accumulate_nnf_relation(
 
     let mut nnf_identity = non_native_field_identity + limb_accumulator_identity;
     nnf_identity *= wire(p, Wire::Q_NNF) * domain_sep;
-    evals[20] = nnf_identity;
+    evals[22] = nnf_identity;
 }
 
 fn accumulate_poseidon_external_relation(
@@ -660,13 +695,13 @@ fn accumulate_poseidon_external_relation(
     let v3 = t2 + v4; // u_1 + 3u_2 + 5u_3 + 7u_4
 
     let q_pos_by_scaling = wire(p, Wire::Q_POSEIDON2_EXTERNAL) * domain_sep;
-    evals[21] += q_pos_by_scaling * (v1 - wire(p, Wire::W_L_SHIFT));
+    evals[23] += q_pos_by_scaling * (v1 - wire(p, Wire::W_L_SHIFT));
 
-    evals[22] += q_pos_by_scaling * (v2 - wire(p, Wire::W_R_SHIFT));
+    evals[24] += q_pos_by_scaling * (v2 - wire(p, Wire::W_R_SHIFT));
 
-    evals[23] += q_pos_by_scaling * (v3 - wire(p, Wire::W_O_SHIFT));
+    evals[25] += q_pos_by_scaling * (v3 - wire(p, Wire::W_O_SHIFT));
 
-    evals[24] += q_pos_by_scaling * (v4 - wire(p, Wire::W_4_SHIFT));
+    evals[26] += q_pos_by_scaling * (v4 - wire(p, Wire::W_4_SHIFT));
 }
 
 fn accumulate_poseidon_internal_relation(
@@ -695,16 +730,16 @@ fn accumulate_poseidon_internal_relation(
     let q_pos_by_scaling = wire(p, Wire::Q_POSEIDON2_INTERNAL) * domain_sep;
 
     let v1 = u1 * INTERNAL_MATRIX_DIAGONAL[0] + u_sum;
-    evals[25] += q_pos_by_scaling * (v1 - wire(p, Wire::W_L_SHIFT));
+    evals[27] += q_pos_by_scaling * (v1 - wire(p, Wire::W_L_SHIFT));
 
     let v2 = u2 * INTERNAL_MATRIX_DIAGONAL[1] + u_sum;
-    evals[26] += q_pos_by_scaling * (v2 - wire(p, Wire::W_R_SHIFT));
+    evals[28] += q_pos_by_scaling * (v2 - wire(p, Wire::W_R_SHIFT));
 
     let v3 = u3 * INTERNAL_MATRIX_DIAGONAL[2] + u_sum;
-    evals[27] += q_pos_by_scaling * (v3 - wire(p, Wire::W_O_SHIFT));
+    evals[29] += q_pos_by_scaling * (v3 - wire(p, Wire::W_O_SHIFT));
 
     let v4 = u4 * INTERNAL_MATRIX_DIAGONAL[3] + u_sum;
-    evals[28] += q_pos_by_scaling * (v4 - wire(p, Wire::W_4_SHIFT));
+    evals[30] += q_pos_by_scaling * (v4 - wire(p, Wire::W_4_SHIFT));
 }
 
 // Batch subrelation evaluations using precomputed powers of alpha.
